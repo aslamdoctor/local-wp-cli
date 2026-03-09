@@ -1,0 +1,100 @@
+#!/bin/bash
+# WP-CLI wrapper for Local by Flywheel sites
+#
+# Usage: wp <site-name> <wp-cli-command...>
+# Example: wp thrive2026 plugin list
+#
+# Local by Flywheel requires its own PHP binary with the site-specific php.ini
+# (which contains the MySQL socket path) to establish the DB connection.
+
+set -euo pipefail
+
+LOCAL_BASE="$HOME/Library/Application Support/Local"
+SITES_JSON="$LOCAL_BASE/sites.json"
+ARCH="$(uname -m)"
+
+# Map architecture to Local's directory naming
+if [[ "$ARCH" == "arm64" ]]; then
+  ARCH_DIR="darwin-arm64"
+else
+  ARCH_DIR="darwin"
+fi
+
+# First argument is the site name
+if [[ $# -lt 1 ]]; then
+  echo "Usage: wp <site-name> <wp-cli-command...>"
+  echo ""
+  echo "Available sites:"
+  python3 -c "
+import json, os
+with open(os.path.expanduser('$SITES_JSON')) as f:
+    sites = json.load(f)
+for s in sites.values():
+    print(f\"  - {s['name']}\")
+"
+  exit 1
+fi
+
+SITE_NAME="$1"
+shift
+
+# Look up site info from sites.json
+SITE_INFO=$(python3 -c "
+import json, os, sys
+with open(os.path.expanduser('$SITES_JSON')) as f:
+    sites = json.load(f)
+for s in sites.values():
+    if s['name'] == '$SITE_NAME':
+        path = s['path'].replace('~', os.path.expanduser('~'))
+        php_ver = s['services']['php']['version']
+        mysql_ver = s['services']['mysql']['version']
+        print(f\"{s['id']}|{path}|{php_ver}|{mysql_ver}\")
+        sys.exit(0)
+print('NOT_FOUND')
+sys.exit(1)
+" 2>&1) || {
+  echo "Error: Site '$SITE_NAME' not found in Local by Flywheel."
+  echo ""
+  echo "Available sites:"
+  python3 -c "
+import json, os
+with open(os.path.expanduser('$SITES_JSON')) as f:
+    sites = json.load(f)
+for s in sites.values():
+    print(f\"  - {s['name']}\")
+"
+  exit 1
+}
+
+IFS='|' read -r SITE_ID SITE_PATH PHP_VER MYSQL_VER <<< "$SITE_INFO"
+
+WP_PATH="$SITE_PATH/app/public"
+
+# Find the PHP binary (match version with glob for the patch suffix like +1)
+PHP_BASE=$(find "$LOCAL_BASE/lightning-services" -maxdepth 1 -type d -name "php-${PHP_VER}*" | head -1)
+if [[ -z "$PHP_BASE" ]]; then
+  echo "Error: Could not find PHP $PHP_VER in Local lightning-services."
+  exit 1
+fi
+PHP_BIN="$PHP_BASE/bin/$ARCH_DIR/bin/php"
+
+# Find the MySQL binary directory
+MYSQL_BASE=$(find "$LOCAL_BASE/lightning-services" -maxdepth 1 -type d -name "mysql-${MYSQL_VER}*" | head -1)
+if [[ -z "$MYSQL_BASE" ]]; then
+  echo "Error: Could not find MySQL $MYSQL_VER in Local lightning-services."
+  exit 1
+fi
+MYSQL_BIN_DIR="$MYSQL_BASE/bin/$ARCH_DIR/bin"
+
+# Site-specific php.ini with MySQL socket configuration
+PHP_INI="$LOCAL_BASE/run/$SITE_ID/conf/php/php.ini"
+
+if [[ ! -f "$PHP_INI" ]]; then
+  echo "Error: php.ini not found at $PHP_INI"
+  echo "Is the '$SITE_NAME' site running in Local?"
+  exit 1
+fi
+
+export PATH="$MYSQL_BIN_DIR:$PATH"
+
+"$PHP_BIN" -c "$PHP_INI" /usr/local/bin/wp --path="$WP_PATH" "$@"
