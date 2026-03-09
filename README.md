@@ -5,15 +5,13 @@ A [Claude Code skill](https://docs.anthropic.com/en/docs/claude-code/skills) tha
 ## Installation
 
 ```bash
-claude skill install local-wp-cli
+npx skills add aslamdoctor/local-wp-cli
 ```
 
-Or add to your project's `.claude/skills.json`:
+Or install globally (available across all projects):
 
-```json
-{
-  "skills": ["local-wp-cli"]
-}
+```bash
+npx skills add aslamdoctor/local-wp-cli -g
 ```
 
 ## Prerequisites
